@@ -1,4 +1,4 @@
-package com.fitbit.hibernate.connection.sample;
+package com.fitbit.hibernate.connection.impl;
 
 import com.fitbit.hibernate.connection.InstrumentedConnectionProvider;
 
@@ -29,15 +29,18 @@ public class TestableInstrumentedConnectionProvider extends InstrumentedConnecti
     }
 
     /**
-     * Sets the ticker used by this connection provider.
+     * Sets the ticker used by this connection provider and the metric reporter.
+     *
      */
-    void setTicker(@Nonnull Ticker ticker) {
+    void setup(@Nonnull Ticker ticker, @Nonnull ConnectionMetricReporter connectionMetricReporter) {
         Preconditions.checkNotNull(ticker);
         this.ticker = ticker;
 
         // inject it manually into our ConnectionPerformanceMetricListener since it was already created
         ConnectionPerformanceMetricListener metricListener =
             getListenerOfType(ConnectionPerformanceMetricListener.class);
-        metricListener.setTicker(ticker);
+        Preconditions.checkState(metricListener != null, "Unable to find attached " +
+            ConnectionPerformanceMetricListener.class);
+        metricListener.setup(ticker, connectionMetricReporter);
     }
 }

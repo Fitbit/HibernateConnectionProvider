@@ -1,4 +1,4 @@
-package com.fitbit.hibernate.connection.sample;
+package com.fitbit.hibernate.connection.impl;
 
 import static org.mockito.Mockito.mock;
 
@@ -35,6 +35,8 @@ public class ConnectionPerformanceMetricListenerUnitTest {
     @Mock
     private ConnectionProvider delegatingConnectionProvider;
 
+    private ConnectionMetricReporter connectionMetricReporter;
+
     @Before
     public void setupConnectionProvider() {
         hibernateProps = new Properties();
@@ -46,6 +48,7 @@ public class ConnectionPerformanceMetricListenerUnitTest {
         hibernateProps.setProperty(InstrumentedConnectionProvider.CONNECTION_PROVIDER_LISTENERS,
             ConnectionPerformanceMetricListener.class.getName());
         ticker = new MockTicker();
+        connectionMetricReporter = StaticConnectionProviderMetricReporter.getInstance();
 
         ConnectionProvider connProvider = ConnectionProviderFactory.newConnectionProvider(hibernateProps);
         Assert.assertTrue(connProvider instanceof TestableInstrumentedConnectionProvider);
@@ -57,7 +60,7 @@ public class ConnectionPerformanceMetricListenerUnitTest {
         // make sure it starts with the system ticker
         Assert.assertSame(Ticker.systemTicker(), connectionProvider.getTicker());
         // inject mock ticker
-        connectionProvider.setTicker(ticker);
+        connectionProvider.setup(ticker, connectionMetricReporter);
         Assert.assertSame(ticker, connectionProvider.getTicker());
 
         // reset the ticker at the beginning of every test
@@ -72,7 +75,7 @@ public class ConnectionPerformanceMetricListenerUnitTest {
         StaticConnectionProviderMetricReporter metrics = StaticConnectionProviderMetricReporter.getInstance();
         Assert.assertEquals(0, metrics.getNumAcquisitionFailures());
         Assert.assertEquals(0, metrics.getNumConnectionsAcquired());
-        Assert.assertEquals(0, metrics.getNumConnectionsReleased());
+        Assert.assertEquals(0, metrics.getNumConnectionsClosed());
         Assert.assertEquals(0L, metrics.getTotalConnectionAcquisitionTimeMillis());
         Assert.assertEquals(0L, metrics.getTotalConnectionReleasingTimeMillis());
         Assert.assertEquals(0L, metrics.getTotalConnectionUsageMillis());
@@ -84,23 +87,23 @@ public class ConnectionPerformanceMetricListenerUnitTest {
 
         getConnection(/*delayMillis=*/null, /*shouldFail=*/false);
         Assert.assertEquals(1, metrics.getNumConnectionsAcquired());
-        Assert.assertEquals(0, metrics.getNumConnectionsReleased());
+        Assert.assertEquals(0, metrics.getNumConnectionsClosed());
         Assert.assertEquals(0, metrics.getNumAcquisitionFailures());
         Assert.assertEquals(0L, metrics.getTotalConnectionAcquisitionTimeMillis());
         // immediately release with no time elapsed
         closeConnection(/*shouldFail=*/false);
-        Assert.assertEquals(1, metrics.getNumConnectionsReleased());
+        Assert.assertEquals(1, metrics.getNumConnectionsClosed());
         Assert.assertEquals(0L, metrics.getTotalConnectionReleasingTimeMillis());
 
         // grab a connection with a delay during acquisition
         getConnection(ACQUISITION_DELAY_MILLIS, /*shouldFail=*/false);
         Assert.assertEquals(2, metrics.getNumConnectionsAcquired());
-        Assert.assertEquals(1, metrics.getNumConnectionsReleased());
+        Assert.assertEquals(1, metrics.getNumConnectionsClosed());
         Assert.assertEquals(0, metrics.getNumAcquisitionFailures());
         Assert.assertEquals(0L, metrics.getTotalConnectionUsageMillis());
         Assert.assertEquals(30L, metrics.getTotalConnectionAcquisitionTimeMillis());
         closeConnection(/*shouldFail=*/false);
-        Assert.assertEquals(2, metrics.getNumConnectionsReleased());
+        Assert.assertEquals(2, metrics.getNumConnectionsClosed());
     }
 
     @Test
@@ -109,7 +112,7 @@ public class ConnectionPerformanceMetricListenerUnitTest {
 
         getConnection(/*delayMillis=*/null, /*shouldFail=*/false);
         Assert.assertEquals(1, metrics.getNumConnectionsAcquired());
-        Assert.assertEquals(0, metrics.getNumConnectionsReleased());
+        Assert.assertEquals(0, metrics.getNumConnectionsClosed());
         Assert.assertEquals(0, metrics.getNumAcquisitionFailures());
         Assert.assertEquals(0L, metrics.getTotalConnectionAcquisitionTimeMillis());
         Assert.assertEquals(0L, metrics.getTotalConnectionUsageMillis());
@@ -119,7 +122,7 @@ public class ConnectionPerformanceMetricListenerUnitTest {
 
         closeConnection(/*shouldFail=*/false);
         Assert.assertEquals(1, metrics.getNumConnectionsAcquired());
-        Assert.assertEquals(1, metrics.getNumConnectionsReleased());
+        Assert.assertEquals(1, metrics.getNumConnectionsClosed());
         Assert.assertEquals(0, metrics.getNumAcquisitionFailures());
         Assert.assertEquals(30L, metrics.getTotalConnectionUsageMillis());
     }
@@ -129,7 +132,7 @@ public class ConnectionPerformanceMetricListenerUnitTest {
         StaticConnectionProviderMetricReporter metrics = StaticConnectionProviderMetricReporter.getInstance();
 
         Assert.assertEquals(0, metrics.getNumConnectionsAcquired());
-        Assert.assertEquals(0, metrics.getNumConnectionsReleased());
+        Assert.assertEquals(0, metrics.getNumConnectionsClosed());
         Assert.assertEquals(0, metrics.getNumAcquisitionFailures());
         Assert.assertEquals(0L, metrics.getTotalConnectionAcquisitionTimeMillis());
         Assert.assertEquals(0L, metrics.getTotalConnectionUsageMillis());

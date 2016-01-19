@@ -1,4 +1,4 @@
-package com.fitbit.hibernate.connection.sample;
+package com.fitbit.hibernate.connection.impl;
 
 import com.fitbit.hibernate.connection.InstrumentedConnectionProvider;
 import com.fitbit.hibernate.connection.event.ConnectionProviderListenerSettings;
@@ -9,12 +9,15 @@ import com.fitbit.hibernate.connection.event.PreConnectionCloseListener;
 import com.fitbit.util.ThreadLocalCounter;
 
 import com.google.common.annotations.VisibleForTesting;
+import com.google.common.base.Preconditions;
 import com.google.common.base.Stopwatch;
 import com.google.common.base.Ticker;
 import org.hibernate.connection.ConnectionProvider;
 
 import java.sql.Connection;
 import java.util.concurrent.TimeUnit;
+
+import javax.annotation.Nonnull;
 
 /**
  * Sample implementation of a ConnectionProviderListener that adds support for timing connection provider operations and
@@ -31,6 +34,11 @@ public class ConnectionPerformanceMetricListener implements PreConnectionAcquisi
      * The ticker to use for stopwatches in this class.
      */
     private Ticker ticker;
+
+    /**
+     * Object capable of recording values for the metrics measured by this listener
+     */
+    private ConnectionMetricReporter connectionMetricReporter;
 
     /**
      * Thread-local stopwatch that is used to measure the time a connection is held for when acquired from the owning
@@ -71,8 +79,11 @@ public class ConnectionPerformanceMetricListener implements PreConnectionAcquisi
     }
 
     @VisibleForTesting
-    void setTicker(Ticker ticker) {
+    void setup(@Nonnull Ticker ticker, @Nonnull ConnectionMetricReporter connectionMetricReporter) {
+        Preconditions.checkNotNull(ticker);
+        Preconditions.checkNotNull(connectionMetricReporter);
         this.ticker = ticker;
+        this.connectionMetricReporter = connectionMetricReporter;
     }
 
     @Override
@@ -85,7 +96,7 @@ public class ConnectionPerformanceMetricListener implements PreConnectionAcquisi
     public void afterConnectionAcquired(InstrumentedConnectionProvider connectionProvider, Connection connection) {
         // just record the time it took to successfully acquire this connection
         long elapsedMillis = operationTimingStopwatch.get().stop().elapsed(TimeUnit.MILLISECONDS);
-        StaticConnectionProviderMetricReporter.getInstance().recordAcquisition(elapsedMillis, /*success=*/true);
+        connectionMetricReporter.recordConnectionAcquired(elapsedMillis);
 
         // reset and start the usage stopwatch now if this is the only connection that will be checked out from this
         //      provider (e.g. there is not already one that has been acquired but *not* released)
@@ -99,7 +110,7 @@ public class ConnectionPerformanceMetricListener implements PreConnectionAcquisi
     public void afterConnectionAcquisitionFailed(InstrumentedConnectionProvider connectionProvider, Throwable exc) {
         // just record the time it took to try and fail to acquire this connection
         long elapsedMillis = operationTimingStopwatch.get().stop().elapsed(TimeUnit.MILLISECONDS);
-        StaticConnectionProviderMetricReporter.getInstance().recordAcquisition(elapsedMillis, /*success=*/false);
+        connectionMetricReporter.recordAcquisitionFailure(elapsedMillis, exc);
     }
 
     @Override
@@ -123,21 +134,18 @@ public class ConnectionPerformanceMetricListener implements PreConnectionAcquisi
 
     @Override
     public void afterConnectionClosed() {
-        // capture timings either way for close
-        recordConnectionClosed();
+        // this stopwatch has already been stopped in beforeClosingConnection(..)
+        long usageDurationMillis = connectionUsageStopwatch.get().elapsed(TimeUnit.MILLISECONDS);
+        long opDurationMillis = operationTimingStopwatch.get().stop().elapsed(TimeUnit.MILLISECONDS);
+        connectionMetricReporter.recordConnectionClosed(opDurationMillis, usageDurationMillis);
     }
 
     @Override
     public void afterConnectionClosingFailed(Connection connection, Throwable exc) {
-        // capture timings either way for close
-        recordConnectionClosed();
-    }
-
-    private void recordConnectionClosed() {
         // this stopwatch has already been stopped in beforeClosingConnection(..)
         long usageDurationMillis = connectionUsageStopwatch.get().elapsed(TimeUnit.MILLISECONDS);
         long opDurationMillis = operationTimingStopwatch.get().stop().elapsed(TimeUnit.MILLISECONDS);
-        StaticConnectionProviderMetricReporter.getInstance().recordRelease(opDurationMillis, usageDurationMillis);
+        connectionMetricReporter.recordCloseFailure(opDurationMillis, usageDurationMillis, exc);
     }
 
     @VisibleForTesting

@@ -58,6 +58,16 @@ public class InstrumentedConnectionProvider implements ConnectionProvider {
     private final Map<Class<? extends ConnectionProviderListener>, ConnectionProviderListener> listenerMap =
         new HashMap<>();
 
+    /**
+     * Configures this instrumented provider using the provided Hibernate properties, most of which are just passed
+     * through to the delegate (&quot;actual&quot;) connection provider implementation which must be provided in the
+     * &quot;hibernate.connection.delegate_provider_class&quot; Hibernate property. This method will invoke callbacks in
+     * this class before and after creating the delegate provider using the {@link ConnectionProviderFactory}, then
+     * creates and configures all {@link ConnectionProviderListener} whose classes are listed in the corresponding
+     * Hibernate property: &quot;hibernate.connection.connection_provider_listeners&quot.
+     * @param props the Hibernate properties
+     * @throws HibernateException any exceptions thrown during configuration
+     */
     @Override
     public final void configure(Properties props) throws HibernateException {
         // allow subclass to pre-process if desired
@@ -75,7 +85,7 @@ public class InstrumentedConnectionProvider implements ConnectionProvider {
         }
         props.setProperty(Environment.CONNECTION_PROVIDER, delegateConnectionProviderClass);
         realConnectionProvider = ConnectionProviderFactory.newConnectionProvider(props);
-        log.trace("Created real connection provider of type {} connected to {}", delegateConnectionProviderClass,
+        log.trace("Created delegate connection provider of type {} connected to {}", delegateConnectionProviderClass,
             jdbcUrl);
 
         // do actual initialization in subclass impl.
@@ -97,9 +107,8 @@ public class InstrumentedConnectionProvider implements ConnectionProvider {
     }
 
     /**
-     * Overrideable callback invoked by {@link #configure(Properties)} so that subclasses can perform their own
-     * initialization, but allows this abstract superclass to control the way it is invoked, allowing pre and post
-     * processing.
+     * Callback that can be overridden by a subclass and will be invoked by {@link #configure(Properties)} so that
+     * any additional initialization logic can be performed.
      */
     protected void initialize(Properties props) throws HibernateException {
         // no-op
@@ -120,7 +129,7 @@ public class InstrumentedConnectionProvider implements ConnectionProvider {
      * @param hibernateProperties the hibernate properties provided here will also be automatically injected by this
      *              connection provider after this method returns a new settings object
      */
-    protected ConnectionProviderListenerSettings createListenerSettings(Properties hibernateProperties) {
+    protected @Nonnull ConnectionProviderListenerSettings createListenerSettings(Properties hibernateProperties) {
         return new ConnectionProviderListenerSettings(this, hibernateProperties);
     }
 
@@ -131,42 +140,62 @@ public class InstrumentedConnectionProvider implements ConnectionProvider {
      * After this method returns, the SQLException will be propagated up, unless another {@link SQLException} is
      * returned from this call.
      */
-    protected SQLException connectionAcquisitionFailed(@Nonnull SQLException exception) {
+    protected @Nonnull SQLException handleAcquisitionFailure(@Nonnull SQLException exception) {
         return exception;
     }
 
     /**
-     * Callback that is invoked after acquiring a connection thru {@link #getConnection()} but prior to invoking any of
-     * the registered post-acquisition callbacks.
+     * Callback that is invoked at the very beginning of {@link #getConnection()}, prior to invoking any registered
+     * listeners, allowing a subclass to prepare any state/context, such as any that might be needed by a listener or
+     * other related components.
+     */
+    protected void beforeAcquiringConnection() {
+        // optional override
+    }
+
+    /**
+     * Callback that is invoked after acquiring a connection through the {@link #getConnection()} method but prior to
+     * invoking any of the registered post-acquisition callbacks. This allows the connection provider to
      * @param connection the exact connection instance that was acquired from the underlying provider
      */
     protected void connectionAcquired(@Nonnull Connection connection) {
-        // no-op
+        // optional override
     }
 
     /**
      * Callback that is invoked immediately prior to calling {@link ConnectionProvider#closeConnection(Connection)} for
      * the provided <strong>connection</strong>.
      */
-    protected void beforeRelease(@Nonnull Connection connection) {
-        // no-op
+    protected void beforeClosingConnection(@Nonnull Connection connection) {
+        // optional override
     }
 
     /**
      * Callback that is invoked immediately after calling {@link ConnectionProvider#closeConnection(Connection)} for
-     * the provided <strong>connection</strong>.
+     * the provided <strong>connection</strong>. This method is gauranteed to execute <strong>after</strong> all
+     * listeners have been invoked. This method should only be used if a subclass wishes to hook into the close
+     * operation, in which case it should not be forced to register with itself as a listener :-)
      */
-    protected void connectionReleased(@Nonnull Connection connection) {
-        // no-op by default
+    protected void afterClosingConnection(@Nonnull Connection connection) {
+        // optional override
+    }
+
+    /**
+     * Callback that is invoked immediately when an attempt to call {@link #closeConnection(Connection)} fails, but
+     * prior to any event listener callbacks being invoked.
+     * @param connection the connection attempted to close
+     * @param exception the exception thrown during that operation
+     */
+    protected void afterCloseConnectionFailed(@Nonnull Connection connection, Exception exception) {
+        // optional override
     }
 
     /**
      * &quot;Customizes&quot; a connection, performing any operations, such as book-keeping, prior to invoking any
      * listeners after a connection is acquired.
-     * @param connection
      */
     protected void customizeConnection(@Nonnull Connection connection) {
-        // no-op by default
+        // optional override
     }
 
     /**
@@ -174,7 +203,7 @@ public class InstrumentedConnectionProvider implements ConnectionProvider {
      * connection provider, allowing a subclass to hook into this event.
      */
     protected void beforeClose() {
-        // no-op
+        // optional override
     }
 
     /**
@@ -218,101 +247,87 @@ public class InstrumentedConnectionProvider implements ConnectionProvider {
 
     @Override
     public final Connection getConnection() throws SQLException {
+        // allow connection provider to prepare any state needed for listeners that might be subscribed to it, or
+        //      any other book-keeping, etc.
+        beforeAcquiringConnection();
+
+        // invoke pre-acquisition callbacks
+        invokeListeners(/* isBefore=*/ true, /*isAcquisition=*/true, /*exc=*/null, /*connection=*/null);
+
         Connection acquiredConn;
         try {
-            acquiredConn = executeOperation(/*existingConnection=*/null, /*isAcquisition=*/true,
-                /*invokeFailureListeners=*/false);
+            // acquire a connection using the delegate connection provider
+            acquiredConn = realConnectionProvider.getConnection();
+
+            // invoke internal callbacks before registered listeners are called
+            afterAcquireBeforeCallbacks(acquiredConn);
         } catch (SQLException se) {
-            // notify subclass of failure prior to invoking failure listeners
-            SQLException rethrowException = connectionAcquisitionFailed(se);
+            // we are catching these to make sure we can properly invoke the failure listeners that are attached to this
+            //      operation. if we immediately propagated the exception up to the caller, then we would never invoke
+            //      these listeners
+
+            // notify subclass of failure prior to invoking failure listeners and allow it to throw a new exception
+            SQLException exceptionToUse = handleAcquisitionFailure(se);
+            if (exceptionToUse == null) {
+                // use the thrown exception
+                log.warn("handleAcquisitionFailure returned null");
+                exceptionToUse = se;
+            }
 
             // invoke failure listeners
-            invokeListeners(/*isBefore=*/false, /*isAcquisition=*/true, /*exception=*/se, /*connection=*/null);
+            invokeListeners(/*isBefore=*/false, /*isAcquisition=*/true, /*exception=*/exceptionToUse,
+                /*connection=*/null);
 
-            // rethrow exception
-            if (rethrowException == null) {
-                rethrowException = se;
-            }
-            throw rethrowException;
+            // rethrow the exception
+            throw exceptionToUse;
+        } catch (RuntimeException e) {
+            // invoke failure listeners
+            invokeListeners(/*isBefore=*/false, /*isAcquisition=*/true, /*exception=*/e,
+                /*connection=*/null);
+            // rethrow the exception
+            throw e;
         }
 
-        // invoke callback for subclass
+        // invoke the listeners post-acquisition
+        invokeListeners(/*isBefore=*/false, /*isAcquisition=*/true, /*exception=*/null, /*connection=*/acquiredConn);
+
+        // invoke callback for subclass after listeners
         connectionAcquired(acquiredConn);
 
         return acquiredConn;
     }
 
     @Override
-    public final void closeConnection(Connection closedConn) throws SQLException {
-        try {
-            beforeRelease(closedConn);
-            executeOperation(closedConn, /*isAcquisition=*/false, /*invokeFailureListeners=*/true);
-        } finally {
-            // make sure to always call this so book-keeping elsewhere does not have major problems
-            connectionReleased(closedConn);
-        }
-    }
-
-    /**
-     * Executes the appropriate connection operation depending on the value of <strong>existingConnection</strong>.
-     * Whenever a connection is provided, we know that we are definitely going
-     * to be performing a close operation, since no connection exists to be passed in when acquiring a connection. As
-     * such, if the <strong>existingConnection</strong> is found to be
-     * <code>null</code> then we know that we are definitely acquiring/opening a new connection.
-     *
-     * @param existingConnection the existing connection, if closing a connection, otherwise <code>null</code> for
-     *                              opening a connection
-     * @param isAcquisition explicit declaration of whether this is an open vs. close (needed for unit testability)
-     * @param invokeFailureListeners if true then failure handlers will be invoked automatically if an exception occurs,
-     *                                  otherwise if <code>false</code> then the caller of this method is responsible
-     *                                  for invoking the failure handlers in all subscribed and enabled interceptors in the chain
-     * @return a connection that was successfully acquired, or <code>null</code> if <strong>existingConnection</strong>
-     *          was provided and we closed the connection successfully
-     * @throws SQLException on any database or connection pooling exceptions
-     */
-    private Connection executeOperation(Connection existingConnection, boolean isAcquisition,
-                                        boolean invokeFailureListeners) throws SQLException {
+    public final void closeConnection(Connection existingConn) throws SQLException {
         // invoke pre-* callbacks
-        invokeListeners(/* isBefore=*/ true, /*isAcquisition=*/ isAcquisition, /*exc=*/null,
-            /*connection=*/existingConnection);
+        invokeListeners(/* isBefore=*/ true, /*isAcquisition=*/false, /*exc=*/null,
+            /*connection=*/existingConn);
 
-        // invoke the actual operation
-        Connection result;
         try {
-            if (isAcquisition) {
-                // acquire a connection using the delegate connection provider
-                result = realConnectionProvider.getConnection();
+            beforeClosingConnection(existingConn);
 
-                // invoke internal callbacks before registered listeners are called
-                afterAcquireBeforeCallbacks(result);
-            } else {
-                // simply close the connection and return null
-                realConnectionProvider.closeConnection(existingConnection);
-                result = null;
-            }
+            // simply close the connection and return null
+            realConnectionProvider.closeConnection(existingConn);
         } catch (SQLException | RuntimeException e) {
+            // allow subclass to handle prior to invoking event listener callbacks
+            afterCloseConnectionFailed(existingConn, e);
+
             // we are catching these to make sure we can properly invoke the failure listeners that are attached to this
             //      operation. if we immediately propagated the exception up to the caller, then we would never invoke
             //      these listeners
-
-            // invoke failure callbacks in interceptor(s), but only if the caller is not going to do so themselves
-            if (invokeFailureListeners) {
-                // make sure to pass in the 'existingConnection' value
-                invokeListeners(/* isBefore=*/ false, /*isAcquisition=*/ isAcquisition, /*exc=*/e,
-                    /*connection=*/existingConnection);
-            }
+            // make sure to pass in the 'existingConnection' value
+            invokeListeners(/* isBefore=*/ false, /*isAcquisition=*/false, /*exc=*/e, /*connection=*/existingConn);
 
             // rethrow the exception
             throw e;
         }
 
-
         // if we get this far, then we succeeded at applying the operation and must invoke post-operation callbacks
         //          on interceptors
-        invokeListeners(/* isBefore=*/ false, /*isAcquisition=*/ isAcquisition, /*exc=*/null, /*connection=*/result);
+        invokeListeners(/* isBefore=*/ false, /*isAcquisition=*/false, /*exc=*/null, /*connection=*/existingConn);
 
-        // return the result
-        return result;
+        // invoke callback in subclass
+        afterClosingConnection(existingConn);
     }
 
     /**
