@@ -39,13 +39,13 @@ import javax.annotation.Nullable;
  */
 public class InstrumentedConnectionProvider implements ConnectionProvider {
 
-    public static final String DELEGATING_CONNECTION_PROVIDER_CLASS = "hibernate.connection.delegate_provider_class";
-    public static final String CONNECTION_PROVIDER_LISTENERS = "hibernate.connection.connection_provider_listeners";
+    public static final String DELEGATE_CONNECTION_PROVIDER_CLASS = "hibernate.connection.delegate_provider_class";
+    public static final String CONNECTION_PROVIDER_LISTENERS = "hibernate.connection.provider_listener_classes";
 
     protected final Logger log = LoggerFactory.getLogger(getClass());
 
-    // the real connection provider we are delegating to
-    private ConnectionProvider realConnectionProvider;
+    // the real connection provider implementation that this provider is delegating operations to
+    private ConnectionProvider delegateConnectionProvider;
 
     // cached JDBC connection URL
     private String jdbcUrl;
@@ -78,15 +78,18 @@ public class InstrumentedConnectionProvider implements ConnectionProvider {
 
         // create the real connection provider instance
         //      restore the real connection provider class name from the delegating property name
-        String delegateConnectionProviderClass = props.getProperty(DELEGATING_CONNECTION_PROVIDER_CLASS);
-        if (StringUtils.isBlank(delegateConnectionProviderClass)) {
-            throw new IllegalStateException("Missing delegating connection provider class name in Hibernate " +
-                "property '" + DELEGATING_CONNECTION_PROVIDER_CLASS + "'");
+        String delegateConnectionProviderClass = props.getProperty(DELEGATE_CONNECTION_PROVIDER_CLASS);
+        if (StringUtils.isNotBlank(delegateConnectionProviderClass)) {
+            props.setProperty(Environment.CONNECTION_PROVIDER, delegateConnectionProviderClass);
+        } else {
+            // allow Hibernate to use its own mechanism for determining the proper built-in provider to use
+            log.warn("No explicit '{}' was declared so the default for the JDBC URL will be used.",
+                DELEGATE_CONNECTION_PROVIDER_CLASS);
+            props.remove(Environment.CONNECTION_PROVIDER);
         }
-        props.setProperty(Environment.CONNECTION_PROVIDER, delegateConnectionProviderClass);
-        realConnectionProvider = ConnectionProviderFactory.newConnectionProvider(props);
-        log.trace("Created delegate connection provider of type {} connected to {}", delegateConnectionProviderClass,
-            jdbcUrl);
+        delegateConnectionProvider = ConnectionProviderFactory.newConnectionProvider(props);
+        log.trace("Created delegate connection provider of type {} connected to {}",
+            delegateConnectionProvider.getClass(), jdbcUrl);
 
         // do actual initialization in subclass impl.
         initialize(props);
@@ -220,7 +223,7 @@ public class InstrumentedConnectionProvider implements ConnectionProvider {
      */
     @Nullable
     public ConnectionProvider getWrappedConnectionProvider() {
-        return realConnectionProvider;
+        return delegateConnectionProvider;
     }
 
     /**
@@ -236,13 +239,13 @@ public class InstrumentedConnectionProvider implements ConnectionProvider {
         try {
             beforeClose();
         } finally {
-            realConnectionProvider.close();
+            delegateConnectionProvider.close();
         }
     }
 
     @Override
     public boolean supportsAggressiveRelease() {
-        return realConnectionProvider.supportsAggressiveRelease();
+        return delegateConnectionProvider.supportsAggressiveRelease();
     }
 
     @Override
@@ -257,7 +260,7 @@ public class InstrumentedConnectionProvider implements ConnectionProvider {
         Connection acquiredConn;
         try {
             // acquire a connection using the delegate connection provider
-            acquiredConn = realConnectionProvider.getConnection();
+            acquiredConn = delegateConnectionProvider.getConnection();
 
             // invoke internal callbacks before registered listeners are called
             afterAcquireBeforeCallbacks(acquiredConn);
@@ -307,7 +310,7 @@ public class InstrumentedConnectionProvider implements ConnectionProvider {
             beforeClosingConnection(existingConn);
 
             // simply close the connection and return null
-            realConnectionProvider.closeConnection(existingConn);
+            delegateConnectionProvider.closeConnection(existingConn);
         } catch (SQLException | RuntimeException e) {
             // allow subclass to handle prior to invoking event listener callbacks
             afterCloseConnectionFailed(existingConn, e);

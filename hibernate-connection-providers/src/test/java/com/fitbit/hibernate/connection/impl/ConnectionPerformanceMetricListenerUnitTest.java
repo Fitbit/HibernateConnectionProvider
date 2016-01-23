@@ -43,7 +43,7 @@ public class ConnectionPerformanceMetricListenerUnitTest {
         hibernateProps.setProperty(Environment.URL, TEST_JDBC_URL);
         hibernateProps.setProperty(Environment.CONNECTION_PROVIDER,
             TestableInstrumentedConnectionProvider.class.getName());
-        hibernateProps.setProperty(InstrumentedConnectionProvider.DELEGATING_CONNECTION_PROVIDER_CLASS,
+        hibernateProps.setProperty(InstrumentedConnectionProvider.DELEGATE_CONNECTION_PROVIDER_CLASS,
             MockConnectionProvider.class.getName());
         hibernateProps.setProperty(InstrumentedConnectionProvider.CONNECTION_PROVIDER_LISTENERS,
             ConnectionPerformanceMetricListener.class.getName());

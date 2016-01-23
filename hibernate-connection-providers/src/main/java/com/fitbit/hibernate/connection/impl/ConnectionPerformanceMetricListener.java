@@ -147,9 +147,4 @@ public class ConnectionPerformanceMetricListener implements PreConnectionAcquisi
         long opDurationMillis = operationTimingStopwatch.get().stop().elapsed(TimeUnit.MILLISECONDS);
         connectionMetricReporter.recordCloseFailure(opDurationMillis, usageDurationMillis, exc);
     }
-
-    @VisibleForTesting
-    int getAcquisitionDepth() {
-        return connectionAcquisitionDepth.getValue();
-    }
 }
