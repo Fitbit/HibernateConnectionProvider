@@ -20,10 +20,6 @@ public class StaticConnectionProviderMetricReporter implements ConnectionMetricR
 
     /** the total elapsed time that all acquired connections (that are also closed) were held before being closed */
     private long totalConnectionUsageMillis;
-    /** the total elapsed time spent executing the <strong>getConnection</strong> method */
-    private long totalConnectionAcquisitionTimeMillis;
-    /** the total elapsed time spent executing the <strong>closeConnection</strong> method */
-    private long totalConnectionReleasingTimeMillis;
     /** the number of successfully acquired connections */
     private int numConnectionsAcquired;
     /** the number of {@link ConnectionProvider#getConnection()} calls that failed */
@@ -34,14 +30,6 @@ public class StaticConnectionProviderMetricReporter implements ConnectionMetricR
     private int numCloseConnectionFailures;
     /** the total number of operations recorded, regardless of success/failure */
     private int totalNumOps;
-
-    public long getTotalConnectionAcquisitionTimeMillis() {
-        return totalConnectionAcquisitionTimeMillis;
-    }
-
-    public long getTotalConnectionReleasingTimeMillis() {
-        return totalConnectionReleasingTimeMillis;
-    }
 
     public long getTotalConnectionUsageMillis() {
         return totalConnectionUsageMillis;
@@ -63,43 +51,37 @@ public class StaticConnectionProviderMetricReporter implements ConnectionMetricR
         return numCloseConnectionFailures;
     }
 
-    @Override
-    public void recordAcquisitionFailure(long failedAcquisitionDurationMillis, Throwable failureCause) {
-        log.error("Failed to acquire a connection in {}ms", failedAcquisitionDurationMillis, failureCause);
+    public int getTotalNumOps() {
+        return totalNumOps;
+    }
 
+    @Override
+    public void recordAcquisitionFailure(Throwable failureCause) {
+        log.error("Failed to acquire a connection", failureCause);
         numAcquisitionFailures++;
-        totalConnectionAcquisitionTimeMillis += failedAcquisitionDurationMillis;
         totalNumOps++;
     }
 
     @Override
-    public void recordConnectionAcquired(long acquisitionDurationMillis) {
-        log.info("Connection acquired in {}ms", acquisitionDurationMillis);
-
+    public void recordConnectionAcquired() {
+        log.info("Connection successfully acquired");
         numConnectionsAcquired++;
-        totalConnectionAcquisitionTimeMillis += acquisitionDurationMillis;
         totalNumOps++;
     }
 
     @Override
-    public void recordConnectionClosed(long closeConnectionDurationMillis, long connectionUsageMillis) {
-        log.info("Successfully closed a connection in {}ms that was open for {}ms",
-            closeConnectionDurationMillis, connectionUsageMillis);
-
+    public void recordConnectionClosed(long connectionUsageMillis) {
+        log.info("Successfully closed a connection that was held open for {}ms", connectionUsageMillis);
         numConnectionsClosed++;
-        totalConnectionReleasingTimeMillis += closeConnectionDurationMillis;
         totalConnectionUsageMillis += connectionUsageMillis;
         totalNumOps++;
     }
 
     @Override
-    public void recordCloseFailure(long failedCloseConnectionDurationMillis, long connectionUsageMillis,
-                                   Throwable failureCause) {
-        log.error("Spent {}ms trying and then failing to close a connection that was open for {}ms",
-            failedCloseConnectionDurationMillis, connectionUsageMillis, failureCause);
-
+    public void recordCloseFailure(long connectionUsageMillis, Throwable failureCause) {
+        log.error("Failed to close a connection that was held open for {}ms", connectionUsageMillis, failureCause);
         numCloseConnectionFailures++;
-        totalConnectionReleasingTimeMillis += failedCloseConnectionDurationMillis;
+        totalConnectionUsageMillis += connectionUsageMillis;
         totalNumOps++;
     }
 
@@ -109,8 +91,6 @@ public class StaticConnectionProviderMetricReporter implements ConnectionMetricR
         numAcquisitionFailures = 0;
         numCloseConnectionFailures = 0;
         totalConnectionUsageMillis = 0;
-        totalConnectionReleasingTimeMillis = 0;
-        totalConnectionAcquisitionTimeMillis = 0;
     }
 
     public static StaticConnectionProviderMetricReporter getInstance() {

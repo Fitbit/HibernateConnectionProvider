@@ -20,15 +20,15 @@ import java.util.concurrent.TimeUnit;
 import javax.annotation.Nonnull;
 
 /**
- * Sample implementation of a ConnectionProviderListener that adds support for timing connection provider operations and
- * recording those metrics somewhere. <br/>
+ * Sample implementation of a ConnectionProviderListener that adds support for timing how long a connection has been
+ * checked out for prior to being returned to a connection provider. <br/>
  * This class uses an abstraction for recording metrics since the mechanism through which metrics are recorded often
  * varies between applications and environments.
  *
  * @author dgarson
  */
-public class ConnectionPerformanceMetricListener implements PreConnectionAcquisitionListener,
-    PostConnectionAcquisitionListener, PreConnectionCloseListener, PostConnectionCloseListener {
+public class ConnectionPerformanceMetricListener implements PostConnectionAcquisitionListener,
+    PreConnectionCloseListener, PostConnectionCloseListener {
 
     /**
      * The ticker to use for stopwatches in this class.
@@ -45,19 +45,6 @@ public class ConnectionPerformanceMetricListener implements PreConnectionAcquisi
      * provider prior to being closed/released.
      */
     private final ThreadLocal<Stopwatch> connectionUsageStopwatch = new ThreadLocal<Stopwatch>() {
-        @Override
-        protected Stopwatch initialValue() {
-            // use the ticker that was provided so we can mock timings
-            return Stopwatch.createUnstarted(ticker);
-        }
-    };
-
-    /**
-     * Thread-local stopwatch that is used to measure how much time it takes for a consumer to acquire or release a
-     * connection from/to this provider. This measures the time between entering and exiting either the
-     * {@link ConnectionProvider#getConnection()} or {@link ConnectionProvider#closeConnection(Connection)} methods.
-     */
-    private final ThreadLocal<Stopwatch> operationTimingStopwatch = new ThreadLocal<Stopwatch>() {
         @Override
         protected Stopwatch initialValue() {
             // use the ticker that was provided so we can mock timings
@@ -87,30 +74,20 @@ public class ConnectionPerformanceMetricListener implements PreConnectionAcquisi
     }
 
     @Override
-    public void beforeConnectionAcquisition(InstrumentedConnectionProvider connectionProvider) {
-        // restart the stopwatch for the time it takes to acquire a connection
-        operationTimingStopwatch.get().reset().start();
-    }
-
-    @Override
     public void afterConnectionAcquired(InstrumentedConnectionProvider connectionProvider, Connection connection) {
-        // just record the time it took to successfully acquire this connection
-        long elapsedMillis = operationTimingStopwatch.get().stop().elapsed(TimeUnit.MILLISECONDS);
-        connectionMetricReporter.recordConnectionAcquired(elapsedMillis);
-
-        // reset and start the usage stopwatch now if this is the only connection that will be checked out from this
+        // reset and start the usage stopwatch now if this is the only connection that 'will' be checked out from this
         //      provider (e.g. there is not already one that has been acquired but *not* released)
         int depth = connectionAcquisitionDepth.incrementAndGet();
         if (depth == 1) {
             connectionUsageStopwatch.get().reset().start();
+            connectionMetricReporter.recordConnectionAcquired();
         }
     }
 
     @Override
     public void afterConnectionAcquisitionFailed(InstrumentedConnectionProvider connectionProvider, Throwable exc) {
-        // just record the time it took to try and fail to acquire this connection
-        long elapsedMillis = operationTimingStopwatch.get().stop().elapsed(TimeUnit.MILLISECONDS);
-        connectionMetricReporter.recordAcquisitionFailure(elapsedMillis, exc);
+        // simply record failure, no timing is necessary
+        connectionMetricReporter.recordAcquisitionFailure(exc);
     }
 
     @Override
@@ -126,25 +103,19 @@ public class ConnectionPerformanceMetricListener implements PreConnectionAcquisi
             //      to perform the actual release
             connectionUsageStopwatch.get().stop();
         }
-
-
-        // start the stopwatch here since we are about to release a connection and can measure the time it takes
-        operationTimingStopwatch.get().reset().start();
     }
 
     @Override
     public void afterConnectionClosed() {
         // this stopwatch has already been stopped in beforeClosingConnection(..)
         long usageDurationMillis = connectionUsageStopwatch.get().elapsed(TimeUnit.MILLISECONDS);
-        long opDurationMillis = operationTimingStopwatch.get().stop().elapsed(TimeUnit.MILLISECONDS);
-        connectionMetricReporter.recordConnectionClosed(opDurationMillis, usageDurationMillis);
+        connectionMetricReporter.recordConnectionClosed(usageDurationMillis);
     }
 
     @Override
     public void afterConnectionClosingFailed(Connection connection, Throwable exc) {
         // this stopwatch has already been stopped in beforeClosingConnection(..)
         long usageDurationMillis = connectionUsageStopwatch.get().elapsed(TimeUnit.MILLISECONDS);
-        long opDurationMillis = operationTimingStopwatch.get().stop().elapsed(TimeUnit.MILLISECONDS);
-        connectionMetricReporter.recordCloseFailure(opDurationMillis, usageDurationMillis, exc);
+        connectionMetricReporter.recordCloseFailure(usageDurationMillis, exc);
     }
 }

@@ -76,8 +76,6 @@ public class ConnectionPerformanceMetricListenerUnitTest {
         Assert.assertEquals(0, metrics.getNumAcquisitionFailures());
         Assert.assertEquals(0, metrics.getNumConnectionsAcquired());
         Assert.assertEquals(0, metrics.getNumConnectionsClosed());
-        Assert.assertEquals(0L, metrics.getTotalConnectionAcquisitionTimeMillis());
-        Assert.assertEquals(0L, metrics.getTotalConnectionReleasingTimeMillis());
         Assert.assertEquals(0L, metrics.getTotalConnectionUsageMillis());
     }
 
@@ -89,11 +87,9 @@ public class ConnectionPerformanceMetricListenerUnitTest {
         Assert.assertEquals(1, metrics.getNumConnectionsAcquired());
         Assert.assertEquals(0, metrics.getNumConnectionsClosed());
         Assert.assertEquals(0, metrics.getNumAcquisitionFailures());
-        Assert.assertEquals(0L, metrics.getTotalConnectionAcquisitionTimeMillis());
         // immediately release with no time elapsed
         closeConnection(/*shouldFail=*/false);
         Assert.assertEquals(1, metrics.getNumConnectionsClosed());
-        Assert.assertEquals(0L, metrics.getTotalConnectionReleasingTimeMillis());
 
         // grab a connection with a delay during acquisition
         getConnection(ACQUISITION_DELAY_MILLIS, /*shouldFail=*/false);
@@ -101,7 +97,6 @@ public class ConnectionPerformanceMetricListenerUnitTest {
         Assert.assertEquals(1, metrics.getNumConnectionsClosed());
         Assert.assertEquals(0, metrics.getNumAcquisitionFailures());
         Assert.assertEquals(0L, metrics.getTotalConnectionUsageMillis());
-        Assert.assertEquals(30L, metrics.getTotalConnectionAcquisitionTimeMillis());
         closeConnection(/*shouldFail=*/false);
         Assert.assertEquals(2, metrics.getNumConnectionsClosed());
     }
@@ -114,7 +109,6 @@ public class ConnectionPerformanceMetricListenerUnitTest {
         Assert.assertEquals(1, metrics.getNumConnectionsAcquired());
         Assert.assertEquals(0, metrics.getNumConnectionsClosed());
         Assert.assertEquals(0, metrics.getNumAcquisitionFailures());
-        Assert.assertEquals(0L, metrics.getTotalConnectionAcquisitionTimeMillis());
         Assert.assertEquals(0L, metrics.getTotalConnectionUsageMillis());
 
         // set elapsed time to 30 ms
@@ -134,7 +128,6 @@ public class ConnectionPerformanceMetricListenerUnitTest {
         Assert.assertEquals(0, metrics.getNumConnectionsAcquired());
         Assert.assertEquals(0, metrics.getNumConnectionsClosed());
         Assert.assertEquals(0, metrics.getNumAcquisitionFailures());
-        Assert.assertEquals(0L, metrics.getTotalConnectionAcquisitionTimeMillis());
         Assert.assertEquals(0L, metrics.getTotalConnectionUsageMillis());
 
         try {
