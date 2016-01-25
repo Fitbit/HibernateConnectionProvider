@@ -48,7 +48,7 @@ public class ConnectionPerformanceMetricListenerUnitTest {
         hibernateProps.setProperty(InstrumentedConnectionProvider.CONNECTION_PROVIDER_LISTENERS,
             ConnectionPerformanceMetricListener.class.getName());
         ticker = new MockTicker();
-        connectionMetricReporter = StaticConnectionProviderMetricReporter.getInstance();
+        connectionMetricReporter = ConnectionMetricReporter.getInstance();
 
         ConnectionProvider connProvider = ConnectionProviderFactory.newConnectionProvider(hibernateProps);
         Assert.assertTrue(connProvider instanceof TestableInstrumentedConnectionProvider);
@@ -67,47 +67,51 @@ public class ConnectionPerformanceMetricListenerUnitTest {
         ticker.setElapsedMillis(0);
 
         // reset any recorded metrics from previous tests
-        StaticConnectionProviderMetricReporter.getInstance().reset();
+        ConnectionMetricReporter.getInstance().reset();
     }
 
     @Test
     public void testMetricsEmptyBeforeRunning() throws Exception {
-        StaticConnectionProviderMetricReporter metrics = StaticConnectionProviderMetricReporter.getInstance();
+        ConnectionMetricReporter metrics = ConnectionMetricReporter.getInstance();
         Assert.assertEquals(0, metrics.getNumAcquisitionFailures());
-        Assert.assertEquals(0, metrics.getNumConnectionsAcquired());
-        Assert.assertEquals(0, metrics.getNumConnectionsClosed());
+        Assert.assertEquals(0, metrics.getNumTopLevelAcquired());
+        Assert.assertEquals(0, metrics.getTotalNumClosed());
+        Assert.assertEquals(0, metrics.getNumTopLevelClosed());
         Assert.assertEquals(0L, metrics.getTotalConnectionUsageMillis());
     }
 
     @Test
     public void testAcquisitionTiming() throws Exception {
-        StaticConnectionProviderMetricReporter metrics = StaticConnectionProviderMetricReporter.getInstance();
+        ConnectionMetricReporter metrics = ConnectionMetricReporter.getInstance();
 
         getConnection(/*delayMillis=*/null, /*shouldFail=*/false);
-        Assert.assertEquals(1, metrics.getNumConnectionsAcquired());
-        Assert.assertEquals(0, metrics.getNumConnectionsClosed());
+        Assert.assertEquals(1, metrics.getNumTopLevelAcquired());
+        Assert.assertEquals(0, metrics.getNumTopLevelClosed());
         Assert.assertEquals(0, metrics.getNumAcquisitionFailures());
         // immediately release with no time elapsed
         closeConnection(/*shouldFail=*/false);
-        Assert.assertEquals(1, metrics.getNumConnectionsClosed());
+        Assert.assertEquals(1, metrics.getNumTopLevelClosed());
+        Assert.assertEquals(1, metrics.getTotalNumClosed());
+        Assert.assertEquals(2, metrics.getTotalNumOps());
+
 
         // grab a connection with a delay during acquisition
         getConnection(ACQUISITION_DELAY_MILLIS, /*shouldFail=*/false);
-        Assert.assertEquals(2, metrics.getNumConnectionsAcquired());
-        Assert.assertEquals(1, metrics.getNumConnectionsClosed());
+        Assert.assertEquals(2, metrics.getNumTopLevelAcquired());
+        Assert.assertEquals(1, metrics.getNumTopLevelClosed());
         Assert.assertEquals(0, metrics.getNumAcquisitionFailures());
         Assert.assertEquals(0L, metrics.getTotalConnectionUsageMillis());
         closeConnection(/*shouldFail=*/false);
-        Assert.assertEquals(2, metrics.getNumConnectionsClosed());
+        Assert.assertEquals(2, metrics.getNumTopLevelClosed());
     }
 
     @Test
     public void testConnectionUsageTiming() throws Exception {
-        StaticConnectionProviderMetricReporter metrics = StaticConnectionProviderMetricReporter.getInstance();
+        ConnectionMetricReporter metrics = ConnectionMetricReporter.getInstance();
 
         getConnection(/*delayMillis=*/null, /*shouldFail=*/false);
-        Assert.assertEquals(1, metrics.getNumConnectionsAcquired());
-        Assert.assertEquals(0, metrics.getNumConnectionsClosed());
+        Assert.assertEquals(1, metrics.getNumTopLevelAcquired());
+        Assert.assertEquals(0, metrics.getNumTopLevelClosed());
         Assert.assertEquals(0, metrics.getNumAcquisitionFailures());
         Assert.assertEquals(0L, metrics.getTotalConnectionUsageMillis());
 
@@ -115,25 +119,25 @@ public class ConnectionPerformanceMetricListenerUnitTest {
         ticker.setElapsedMillis(30);
 
         closeConnection(/*shouldFail=*/false);
-        Assert.assertEquals(1, metrics.getNumConnectionsAcquired());
-        Assert.assertEquals(1, metrics.getNumConnectionsClosed());
+        Assert.assertEquals(1, metrics.getNumTopLevelAcquired());
+        Assert.assertEquals(1, metrics.getNumTopLevelClosed());
         Assert.assertEquals(0, metrics.getNumAcquisitionFailures());
         Assert.assertEquals(30L, metrics.getTotalConnectionUsageMillis());
     }
 
     @Test(expected = SQLException.class)
     public void testCaptureFailures() throws Exception {
-        StaticConnectionProviderMetricReporter metrics = StaticConnectionProviderMetricReporter.getInstance();
+        ConnectionMetricReporter metrics = ConnectionMetricReporter.getInstance();
 
-        Assert.assertEquals(0, metrics.getNumConnectionsAcquired());
-        Assert.assertEquals(0, metrics.getNumConnectionsClosed());
+        Assert.assertEquals(0, metrics.getNumTopLevelAcquired());
+        Assert.assertEquals(0, metrics.getNumTopLevelClosed());
         Assert.assertEquals(0, metrics.getNumAcquisitionFailures());
         Assert.assertEquals(0L, metrics.getTotalConnectionUsageMillis());
 
         try {
             getConnection(/*delayMillis=*/null, /*shouldFail=*/true);
         } finally {
-            Assert.assertEquals(0, metrics.getNumConnectionsAcquired());
+            Assert.assertEquals(0, metrics.getNumTopLevelAcquired());
             Assert.assertEquals(1, metrics.getNumAcquisitionFailures());
         }
     }

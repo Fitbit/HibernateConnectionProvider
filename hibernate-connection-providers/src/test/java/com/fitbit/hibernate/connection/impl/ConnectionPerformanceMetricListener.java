@@ -3,8 +3,6 @@ package com.fitbit.hibernate.connection.impl;
 import com.fitbit.hibernate.connection.InstrumentedConnectionProvider;
 import com.fitbit.hibernate.connection.event.ConnectionProviderListenerSettings;
 import com.fitbit.hibernate.connection.event.PostConnectionAcquisitionListener;
-import com.fitbit.hibernate.connection.event.PostConnectionCloseListener;
-import com.fitbit.hibernate.connection.event.PreConnectionAcquisitionListener;
 import com.fitbit.hibernate.connection.event.PreConnectionCloseListener;
 import com.fitbit.util.ThreadLocalCounter;
 
@@ -12,7 +10,6 @@ import com.google.common.annotations.VisibleForTesting;
 import com.google.common.base.Preconditions;
 import com.google.common.base.Stopwatch;
 import com.google.common.base.Ticker;
-import org.hibernate.connection.ConnectionProvider;
 
 import java.sql.Connection;
 import java.util.concurrent.TimeUnit;
@@ -28,17 +25,18 @@ import javax.annotation.Nonnull;
  * @author dgarson
  */
 public class ConnectionPerformanceMetricListener implements PostConnectionAcquisitionListener,
-    PreConnectionCloseListener, PostConnectionCloseListener {
+    PreConnectionCloseListener {
 
     /**
-     * The ticker to use for stopwatches in this class.
+     * The ticker to use for stopwatches in this class. Start with the system ticker but allow any test code to override
+     * so that it can measure timings without requiring any {@link Thread#sleep(long)} calls.
      */
-    private Ticker ticker;
+    private Ticker ticker = Ticker.systemTicker();
 
     /**
      * Object capable of recording values for the metrics measured by this listener
      */
-    private ConnectionMetricReporter connectionMetricReporter;
+    private ConnectionMetricReporter connectionMetricReporter = ConnectionMetricReporter.getInstance();
 
     /**
      * Thread-local stopwatch that is used to measure the time a connection is held for when acquired from the owning
@@ -80,14 +78,18 @@ public class ConnectionPerformanceMetricListener implements PostConnectionAcquis
         int depth = connectionAcquisitionDepth.incrementAndGet();
         if (depth == 1) {
             connectionUsageStopwatch.get().reset().start();
-            connectionMetricReporter.recordConnectionAcquired();
+            connectionMetricReporter.recordConnectionAcquired(/*isTopLevel=*/true);
+        } else {
+            // record that we did this but do not consider it an 'acquisition' in the metrics unless we are also timing
+            //          it
+            connectionMetricReporter.recordConnectionAcquired(/*isTopLevel=*/false);
         }
     }
 
     @Override
     public void afterConnectionAcquisitionFailed(InstrumentedConnectionProvider connectionProvider, Throwable exc) {
         // simply record failure, no timing is necessary
-        connectionMetricReporter.recordAcquisitionFailure(exc);
+        connectionMetricReporter.recordAcquisitionFailure(connectionAcquisitionDepth.getValue() == 0, exc);
     }
 
     @Override
@@ -101,21 +103,12 @@ public class ConnectionPerformanceMetricListener implements PostConnectionAcquis
             // this marks the last time the user code held the connection, so we can halt the usage duration stopwatch
             //      but wait until after the operation completes to record it since we do not yet know how long it took
             //      to perform the actual release
-            connectionUsageStopwatch.get().stop();
+            long usageDurationMillis = connectionUsageStopwatch.get().stop().elapsed(TimeUnit.MILLISECONDS);
+            connectionMetricReporter.recordConnectionClosed(/*isTopLevel=*/true, usageDurationMillis);
+        } else {
+            // record that we did this but do not consider it a normal 'close' in the metrics unless we are also timing
+            //          it
+            connectionMetricReporter.recordConnectionClosed(/*isTopLevel=*/false, -1);
         }
-    }
-
-    @Override
-    public void afterConnectionClosed() {
-        // this stopwatch has already been stopped in beforeClosingConnection(..)
-        long usageDurationMillis = connectionUsageStopwatch.get().elapsed(TimeUnit.MILLISECONDS);
-        connectionMetricReporter.recordConnectionClosed(usageDurationMillis);
-    }
-
-    @Override
-    public void afterConnectionClosingFailed(Connection connection, Throwable exc) {
-        // this stopwatch has already been stopped in beforeClosingConnection(..)
-        long usageDurationMillis = connectionUsageStopwatch.get().elapsed(TimeUnit.MILLISECONDS);
-        connectionMetricReporter.recordCloseFailure(usageDurationMillis, exc);
     }
 }
