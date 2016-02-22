@@ -1,0 +1,29 @@
+group 'com.fitbit.blog'
+version '1.0-SNAPSHOT'
+
+apply plugin: 'java'
+apply plugin: 'idea'
+
+sourceCompatibility = 1.7
+targetCompatibility = 1.7
+
+repositories {
+    mavenCentral()
+}
+
+dependencies {
+    compile "org.hibernate:hibernate-core:${versions.hibernate4}"
+
+    compile "org.apache.commons:commons-lang3:${versions['commons-lang3']}",
+            "com.google.guava:guava:${versions.guava}",
+            "org.slf4j:slf4j-api:${versions.slf4j}",
+            "com.google.code.findbugs:jsr305:${versions.jsr305}",
+            "javax.transaction:jta:1.1"
+
+    testRuntime "ch.qos.logback:logback-core:${versions.logback}",
+                "ch.qos.logback:logback-classic:${versions.logback}"
+
+    testCompile "junit:junit:${versions.junit}",
+            "org.mockito:mockito-core:${versions.mockito}"
+    testCompile "org.hsqldb:hsqldb:${versions.hsqldb}"
+}

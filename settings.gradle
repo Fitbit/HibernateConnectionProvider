@@ -1,0 +1,5 @@
+rootProject.name = 'fitbit-drg-blog'
+
+include 'hibernate3-connection-providers'
+include 'hibernate4-connection-providers'
+
